@@ -402,9 +402,8 @@
 
     // Nordic UART Service (NUS): NOT advertised, discoverable after connection only
     const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-    const NUS_RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+    const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
     const NUS_TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
-    // const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
     /* ============================================================
        State
@@ -414,7 +413,8 @@
 
     // BLE state
     let bleDevice = null;
-    let txCharacteristic = null;
+    let rxCharacteristic = null;  // NUS RX (write to device)
+    let txCharacteristic = null;  // NUS TX (receive from device)
 
     // USB (Web Serial) state
     let serialPort = null;
@@ -493,8 +493,6 @@
     /* ============================================================
        Connection Dispatcher
        ============================================================ */
-    function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
     async function connect() {
       if (connMode === 'usb') { await connectUSB(); }
       else { await connectBLE(); }
@@ -514,6 +512,7 @@
     }
 
     function onDisconnected() {
+      rxCharacteristic = null;
       txCharacteristic = null;
       serialPort = null;
       serialReader = null;
@@ -551,22 +550,13 @@
         setStatus('Connecting GATT...');
         const server = await bleDevice.gatt.connect();
 
-        // Give the OS Bluetooth stack time to complete GATT service
-        // discovery.  Pybricks' own Web IDE uses a 1 s delay here.
-        await delay(1000);
-
-        // Step 1: Enable Pybricks service notifications.
-        setStatus('Enabling Pybricks service...');
-        const pbService = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
-        const pbChar = await pbService.getCharacteristic(PYBRICKS_CMD_EVENT_UUID);
-        await pbChar.stopNotifications().catch(() => { });
-        await pbChar.startNotifications();
-
-        // Step 2: Subscribe to NUS Tx notifications for syslog data.
+        // NUS サービスを取得して通信路を開く
         setStatus('Subscribing to NUS...');
         const nusService = await server.getPrimaryService(NUS_SERVICE_UUID);
+
+        rxCharacteristic = await nusService.getCharacteristic(NUS_RX_CHAR_UUID);
         txCharacteristic = await nusService.getCharacteristic(NUS_TX_CHAR_UUID);
-        await txCharacteristic.stopNotifications().catch(() => { });
+
         await txCharacteristic.startNotifications();
         txCharacteristic.addEventListener('characteristicvaluechanged', onBLEReceive);
 
@@ -663,7 +653,7 @@
     }
 
     function feedText(chunk) {
-      receiveBuffer += chunk;
+      receiveBuffer += chunk.replace(/\u0000/g, '');
       const parts = receiveBuffer.split('\n');
       receiveBuffer = parts.pop(); // keep incomplete trailing part
 
