@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPIKE Prime Logger</title>
+  <style>
+    /* ============================================================
+   Reset & Base
+   ============================================================ */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --border: #0f3460;
+      --text: #e0e0e0;
+      --text-dim: #888;
+      --accent: #e94560;
+      --green: #4ecca3;
+      --yellow: #f0c040;
+      --blue: #4db8ff;
+      --orange: #ff8c42;
+      --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+    }
+
+    body {
+      font-family: var(--font-mono);
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ============================================================
+   Header
+   ============================================================ */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-right: auto;
+      white-space: nowrap;
+    }
+
+    header h1 span {
+      color: var(--accent);
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      background: var(--border);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    button.primary:hover {
+      background: #c23152;
+    }
+
+    button.primary:disabled {
+      background: var(--accent);
+    }
+
+    .mode-switch {
+      display: flex;
+      gap: 0;
+    }
+
+    .mode-switch button.mode {
+      border-radius: 0;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      background: var(--bg);
+    }
+
+    .mode-switch button.mode:first-child {
+      border-radius: 4px 0 0 4px;
+    }
+
+    .mode-switch button.mode:last-child {
+      border-radius: 0 4px 4px 0;
+      border-left: none;
+    }
+
+    .mode-switch button.mode.active {
+      background: var(--border);
+      color: var(--blue);
+      border-color: var(--blue);
+    }
+
+    .mode-switch button.mode.active+button.mode {
+      border-left-color: var(--blue);
+    }
+
+    #status {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #status .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: inline-block;
+    }
+
+    #status.connected .dot {
+      background: var(--green);
+    }
+
+    /* ============================================================
+   Main Layout
+   ============================================================ */
+    main {
+      flex: 1;
+      display: flex;
+      gap: 0;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .panel:last-child {
+      border-right: none;
+    }
+
+    .panel-header {
+      padding: 8px 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    /* ---- Log Panel ---- */
+    #log-panel {
+      flex: 1;
+      min-width: 300px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .filters button {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    .filters button.active {
+      background: var(--border);
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    #log-output {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      padding: 8px 12px;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line {
+      padding: 1px 0;
+    }
+
+    .log-line.tag-Measure {
+      color: var(--green);
+    }
+
+    .log-line.tag-ODO {
+      color: var(--blue);
+    }
+
+    .log-line.tag-CAL {
+      color: var(--yellow);
+    }
+
+    .log-line.tag-CALT {
+      color: var(--orange);
+    }
+
+    .log-line.tag-Other {
+      color: var(--text-dim);
+    }
+
+    .log-line.hidden {
+      display: none;
+    }
+
+    #log-count {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+
+    /* ---- Plot Panel ---- */
+    #plot-panel {
+      flex: 1;
+      min-width: 300px;
+    }
+
+    #plot-canvas {
+      flex: 1;
+      width: 100%;
+      background: #0d1117;
+      display: block;
+    }
+
+    #plot-info {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+
+    /* ============================================================
+   Responsive
+   ============================================================ */
+    @media (max-width: 768px) {
+      main {
+        flex-direction: column;
+      }
+
+      .panel {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        min-height: 0;
+        flex: 1;
+      }
+
+      .panel:last-child {
+        border-bottom: none;
+      }
+    }
+
+    /* ============================================================
+   Scrollbar
+   ============================================================ */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #1a4a8a;
+    }
+
+    /* ============================================================
+   Not-supported banner
+   ============================================================ */
+    #not-supported {
+      display: none;
+      padding: 20px;
+      text-align: center;
+      color: var(--yellow);
+      font-size: 14px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <h1><span>SPIKE Prime</span> Logger</h1>
+    <div class="toolbar">
+      <div class="mode-switch">
+        <button id="btn-mode-ble" class="mode active">BLE</button>
+        <button id="btn-mode-usb" class="mode">USB</button>
+      </div>
+      <button id="btn-connect" class="primary">Connect</button>
+      <button id="btn-disconnect" disabled>Disconnect</button>
+      <button id="btn-clear">Clear</button>
+      <button id="btn-download">Download</button>
+      <button id="btn-load">Load</button>
+      <input type="file" id="file-input" accept=".log,.txt" style="display:none">
+    </div>
+    <div id="status">
+      <span class="dot"></span>
+      <span id="status-text">Disconnected</span>
+    </div>
+  </header>
+
+  <div id="not-supported">
+    Neither Web Bluetooth nor Web Serial is supported in this browser.<br>
+    Please use Chrome or Edge on desktop.
+  </div>
+
+  <main id="main-content">
+    <!-- Log Panel -->
+    <div class="panel" id="log-panel">
+      <div class="panel-header">
+        <span>Log</span>
+        <div class="filters">
+          <button class="active" data-filter="All">All</button>
+          <button class="active" data-filter="Measure">Measure</button>
+          <button class="active" data-filter="CALT">CALT</button>
+          <button class="active" data-filter="ODO">ODO</button>
+          <button class="active" data-filter="CAL">CAL</button>
+          <button class="active" data-filter="Other">Other</button>
+        </div>
+        <span id="log-count">0 lines</span>
+      </div>
+      <div id="log-output"></div>
+    </div>
+
+    <!-- Plot Panel -->
+    <div class="panel" id="plot-panel">
+      <div class="panel-header">
+        <span>Trajectory</span>
+        <button id="btn-plot-clear" style="font-size:11px;padding:2px 8px;">Reset View</button>
+        <span id="plot-info">0 points</span>
+      </div>
+      <canvas id="plot-canvas"></canvas>
+    </div>
+  </main>
+
+  <script>
+    /* ============================================================
+       Constants
+       ============================================================ */
+    // Pybricks Service: advertised in BLE advertising data (used for device filtering)
+    const PYBRICKS_SERVICE_UUID = 'c5f50001-8280-46da-89f4-6d8051e4aeef';
+
+    // Nordic UART Service (NUS): NOT advertised, discoverable after connection only
+    const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+    const NUS_RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+    const NUS_TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+    // const NUS_RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+    /* ============================================================
+       State
+       ============================================================ */
+    // Connection mode: 'ble' or 'usb'
+    let connMode = 'ble';
+
+    // BLE state
+    let bleDevice = null;
+    let txCharacteristic = null;
+
+    // USB (Web Serial) state
+    let serialPort = null;
+    let serialReader = null;
+    let serialReadable = null;  // ReadableStream from port
+    let usbReadLoopRunning = false;
+
+    // Common state
+    let receiveBuffer = '';
+    const logLines = [];        // { text, tag, element }
+    const odoPoints = [];       // { x, y, theta, phase }
+    let autoScroll = true;
+    let currentPhase = 'idle';  // 'idle' | 'measure' | 'course'
+    const activeFilters = new Set(['All', 'Measure', 'ODO', 'CAL', 'CALT', 'Other']);
+
+    /* ============================================================
+       DOM Refs
+       ============================================================ */
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const btnModeBle = document.getElementById('btn-mode-ble');
+    const btnModeUsb = document.getElementById('btn-mode-usb');
+    const btnClear = document.getElementById('btn-clear');
+    const btnDownload = document.getElementById('btn-download');
+    const btnLoad = document.getElementById('btn-load');
+    const fileInput = document.getElementById('file-input');
+    const btnPlotClear = document.getElementById('btn-plot-clear');
+    const statusEl = document.getElementById('status');
+    const statusText = document.getElementById('status-text');
+    const logOutput = document.getElementById('log-output');
+    const logCount = document.getElementById('log-count');
+    const plotInfo = document.getElementById('plot-info');
+    const canvas = document.getElementById('plot-canvas');
+    const ctx = canvas.getContext('2d');
+
+    /* ============================================================
+       API Support Check
+       ============================================================ */
+    const hasBLE = !!navigator.bluetooth;
+    const hasSerial = !!navigator.serial;
+
+    if (!hasBLE && !hasSerial) {
+      document.getElementById('not-supported').style.display = 'block';
+      document.getElementById('main-content').style.display = 'none';
+      btnConnect.disabled = true;
+    }
+
+    // Disable mode buttons for unsupported APIs
+    if (!hasBLE) btnModeBle.disabled = true;
+    if (!hasSerial) btnModeUsb.disabled = true;
+
+    // If default mode is unsupported, switch
+    if (!hasBLE && hasSerial) {
+      connMode = 'usb';
+      btnModeBle.classList.remove('active');
+      btnModeUsb.classList.add('active');
+    }
+
+    /* ============================================================
+       Mode Switch
+       ============================================================ */
+    btnModeBle.addEventListener('click', () => {
+      if (!hasBLE || connMode === 'ble') return;
+      connMode = 'ble';
+      btnModeBle.classList.add('active');
+      btnModeUsb.classList.remove('active');
+    });
+
+    btnModeUsb.addEventListener('click', () => {
+      if (!hasSerial || connMode === 'usb') return;
+      connMode = 'usb';
+      btnModeUsb.classList.add('active');
+      btnModeBle.classList.remove('active');
+    });
+
+    /* ============================================================
+       Connection Dispatcher
+       ============================================================ */
+    function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    async function connect() {
+      if (connMode === 'usb') { await connectUSB(); }
+      else { await connectBLE(); }
+    }
+
+    function disconnect() {
+      if (connMode === 'usb') { disconnectUSB(); }
+      else { disconnectBLE(); }
+    }
+
+    function onConnected(label) {
+      setStatus('Connected: ' + label, true);
+      btnConnect.disabled = true;
+      btnDisconnect.disabled = false;
+      btnModeBle.disabled = true;
+      btnModeUsb.disabled = true;
+    }
+
+    function onDisconnected() {
+      txCharacteristic = null;
+      serialPort = null;
+      serialReader = null;
+      serialReadable = null;
+      usbReadLoopRunning = false;
+      setStatus('Disconnected');
+      btnConnect.disabled = false;
+      btnDisconnect.disabled = true;
+      if (hasBLE) btnModeBle.disabled = false;
+      if (hasSerial) btnModeUsb.disabled = false;
+    }
+
+    function setStatus(text, connected) {
+      statusText.textContent = text;
+      if (connected) {
+        statusEl.classList.add('connected');
+      } else {
+        statusEl.classList.remove('connected');
+      }
+    }
+
+    /* ============================================================
+       BLE Connection
+       ============================================================ */
+    async function connectBLE() {
+      try {
+        setStatus('Requesting device...');
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [PYBRICKS_SERVICE_UUID] }],
+          optionalServices: [NUS_SERVICE_UUID],
+        });
+
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        setStatus('Connecting GATT...');
+        const server = await bleDevice.gatt.connect();
+
+        // Give the OS Bluetooth stack time to complete GATT service
+        // discovery.  Pybricks' own Web IDE uses a 1 s delay here.
+        await delay(1000);
+
+        // Step 1: Enable Pybricks service notifications.
+        setStatus('Enabling Pybricks service...');
+        const pbService = await server.getPrimaryService(PYBRICKS_SERVICE_UUID);
+        const pbChar = await pbService.getCharacteristic(PYBRICKS_CMD_EVENT_UUID);
+        await pbChar.stopNotifications().catch(() => { });
+        await pbChar.startNotifications();
+
+        // Step 2: Subscribe to NUS Tx notifications for syslog data.
+        setStatus('Subscribing to NUS...');
+        const nusService = await server.getPrimaryService(NUS_SERVICE_UUID);
+        txCharacteristic = await nusService.getCharacteristic(NUS_TX_CHAR_UUID);
+        await txCharacteristic.stopNotifications().catch(() => { });
+        await txCharacteristic.startNotifications();
+        txCharacteristic.addEventListener('characteristicvaluechanged', onBLEReceive);
+
+        onConnected(bleDevice.name || 'BLE Device');
+      } catch (err) {
+        if (err.name === 'NotFoundError') {
+          setStatus('No device selected');
+        } else {
+          setStatus('Error: ' + err.message);
+          console.error('[BLE]', err);
+          if (bleDevice && bleDevice.gatt.connected) {
+            bleDevice.gatt.disconnect();
+          }
+        }
+      }
+    }
+
+    function disconnectBLE() {
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+      }
+    }
+
+    /* ============================================================
+       USB (Web Serial) Connection
+       ============================================================ */
+    async function connectUSB() {
+      try {
+        setStatus('Requesting serial port...');
+        serialPort = await navigator.serial.requestPort();
+
+        setStatus('Opening port...');
+        await serialPort.open({ baudRate: 115200 });
+
+        serialPort.addEventListener('disconnect', onDisconnected);
+
+        usbReadLoopRunning = true;
+        usbReadLoop();   // fire-and-forget async
+
+        onConnected('USB Serial');
+      } catch (err) {
+        if (err.name === 'NotFoundError') {
+          setStatus('No port selected');
+        } else {
+          setStatus('Error: ' + err.message);
+          console.error('[USB]', err);
+        }
+      }
+    }
+
+    async function usbReadLoop() {
+      const decoder = new TextDecoderStream();
+      serialReadable = serialPort.readable.pipeThrough(decoder);
+      serialReader = serialReadable.getReader();
+      try {
+        while (usbReadLoopRunning) {
+          const { value, done } = await serialReader.read();
+          if (done) break;
+          if (value) feedText(value);
+        }
+      } catch (err) {
+        if (usbReadLoopRunning) {
+          console.error('[USB] read error:', err);
+          setStatus('USB read error: ' + err.message);
+        }
+      } finally {
+        serialReader.releaseLock();
+        serialReader = null;
+      }
+    }
+
+    async function disconnectUSB() {
+      usbReadLoopRunning = false;
+      try {
+        if (serialReader) {
+          await serialReader.cancel();
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        if (serialPort) {
+          await serialPort.close();
+        }
+      } catch (e) { /* ignore */ }
+      onDisconnected();
+    }
+
+    /* ============================================================
+       Data Reception & Parsing
+       ============================================================ */
+    function onBLEReceive(event) {
+      const value = event.target.value;
+      const chunk = new TextDecoder().decode(value);
+      feedText(chunk);
+    }
+
+    function feedText(chunk) {
+      receiveBuffer += chunk;
+      const parts = receiveBuffer.split('\n');
+      receiveBuffer = parts.pop(); // keep incomplete trailing part
+
+      for (const raw of parts) {
+        const line = raw.replace(/\r$/, '').trim();
+        if (line.length === 0) continue;
+        processLine(line);
+      }
+    }
+
+    function classifyTag(line) {
+      if (line.includes('[Measure]')) return 'Measure';
+      if (line.includes('[CALT]')) return 'CALT';
+      if (line.includes('[ODO]')) return 'ODO';
+      if (line.includes('[CAL]')) return 'CAL';
+      return 'Other';
+    }
+
+    function processLine(text) {
+      const tag = classifyTag(text);
+
+      // Detect phase transitions from log messages
+      if (tag === 'Measure' && text.includes('START')) {
+        currentPhase = 'measure';
+      } else if (tag === 'CALT' && text.includes('started')) {
+        currentPhase = 'course';
+      }
+
+      // Parse ODO data for trajectory
+      if (tag === 'ODO') {
+        const m = text.match(/\[ODO\]\s+x=(-?\d+)\s+y=(-?\d+)\s+theta=(-?\d+)/);
+        if (m) {
+          odoPoints.push({
+            x: parseInt(m[1], 10),
+            y: parseInt(m[2], 10),
+            theta: parseInt(m[3], 10),
+            phase: currentPhase,
+          });
+          plotInfo.textContent = odoPoints.length + ' points';
+          requestPlotRedraw();
+        }
+      }
+
+      // Create log element
+      const el = document.createElement('div');
+      el.className = 'log-line tag-' + tag;
+      el.textContent = text;
+
+      // Apply filter visibility
+      if (!activeFilters.has(tag) && !activeFilters.has('All')) {
+        el.classList.add('hidden');
+      }
+
+      const entry = { text, tag, element: el };
+      logLines.push(entry);
+
+      logOutput.appendChild(el);
+      logCount.textContent = logLines.length + ' lines';
+
+      // Auto-scroll
+      if (autoScroll) {
+        logOutput.scrollTop = logOutput.scrollHeight;
+      }
+    }
+
+    /* ============================================================
+       Log auto-scroll detection
+       ============================================================ */
+    logOutput.addEventListener('scroll', () => {
+      const threshold = 40;
+      autoScroll =
+        logOutput.scrollTop + logOutput.clientHeight >=
+        logOutput.scrollHeight - threshold;
+    });
+
+    /* ============================================================
+       Filters
+       ============================================================ */
+    document.querySelectorAll('.filters button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.filter;
+
+        if (filter === 'All') {
+          // Toggle All: if All is active, deactivate all; if inactive, activate all
+          if (activeFilters.has('All')) {
+            activeFilters.clear();
+          } else {
+            activeFilters.add('All');
+            activeFilters.add('Measure');
+            activeFilters.add('CALT');
+            activeFilters.add('ODO');
+            activeFilters.add('CAL');
+            activeFilters.add('Other');
+          }
+        } else {
+          if (activeFilters.has(filter)) {
+            activeFilters.delete(filter);
+            activeFilters.delete('All');
+          } else {
+            activeFilters.add(filter);
+            // Check if all individual filters are active
+            if (
+              activeFilters.has('Measure') &&
+              activeFilters.has('CALT') &&
+              activeFilters.has('ODO') &&
+              activeFilters.has('CAL') &&
+              activeFilters.has('Other')
+            ) {
+              activeFilters.add('All');
+            }
+          }
+        }
+
+        // Update button states
+        document.querySelectorAll('.filters button').forEach((b) => {
+          b.classList.toggle('active', activeFilters.has(b.dataset.filter));
+        });
+
+        // Apply visibility
+        applyFilters();
+      });
+    });
+
+    function applyFilters() {
+      const showAll = activeFilters.has('All');
+      for (const entry of logLines) {
+        const visible = showAll || activeFilters.has(entry.tag);
+        entry.element.classList.toggle('hidden', !visible);
+      }
+    }
+
+    /* ============================================================
+       Clear & Download
+       ============================================================ */
+    btnClear.addEventListener('click', () => {
+      logLines.length = 0;
+      odoPoints.length = 0;
+      logOutput.innerHTML = '';
+      logCount.textContent = '0 lines';
+      plotInfo.textContent = '0 points';
+      receiveBuffer = '';
+      currentPhase = 'idle';
+      requestPlotRedraw();
+    });
+
+    btnDownload.addEventListener('click', () => {
+      if (logLines.length === 0) return;
+      const content = logLines.map((e) => e.text).join('\n') + '\n';
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const now = new Date();
+      const ts =
+        now.getFullYear().toString() +
+        (now.getMonth() + 1).toString().padStart(2, '0') +
+        now.getDate().toString().padStart(2, '0') +
+        '_' +
+        now.getHours().toString().padStart(2, '0') +
+        now.getMinutes().toString().padStart(2, '0') +
+        now.getSeconds().toString().padStart(2, '0');
+      a.href = url;
+      a.download = 'spike_log_' + ts + '.log';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    btnConnect.addEventListener('click', connect);
+    btnDisconnect.addEventListener('click', disconnect);
+
+    /* ============================================================
+       Load log file
+       ============================================================ */
+    btnLoad.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        // Clear existing data
+        logLines.length = 0;
+        odoPoints.length = 0;
+        logOutput.innerHTML = '';
+        logCount.textContent = '0 lines';
+        plotInfo.textContent = '0 points';
+        receiveBuffer = '';
+        currentPhase = 'idle';
+
+        // Process each line through the existing pipeline
+        const lines = ev.target.result.split('\n');
+        for (const raw of lines) {
+          const line = raw.replace(/\r$/, '').trim();
+          if (line.length === 0) continue;
+          processLine(line);
+        }
+
+        // Scroll to top after loading
+        autoScroll = false;
+        logOutput.scrollTop = 0;
+
+        setStatus('Loaded: ' + file.name + ' (' + logLines.length + ' lines)');
+      };
+      reader.readAsText(file);
+
+      // Reset so the same file can be re-selected
+      fileInput.value = '';
+    });
+
+    /* ============================================================
+       Trajectory Plot (Canvas 2D)
+       ============================================================ */
+    let plotRedrawRequested = false;
+
+    function requestPlotRedraw() {
+      if (!plotRedrawRequested) {
+        plotRedrawRequested = true;
+        requestAnimationFrame(() => {
+          plotRedrawRequested = false;
+          drawPlot();
+        });
+      }
+    }
+
+    function resizeCanvas() {
+      const panel = document.getElementById('plot-panel');
+      const header = panel.querySelector('.panel-header');
+      const rect = panel.getBoundingClientRect();
+      const headerH = header.getBoundingClientRect().height;
+      const dpr = window.devicePixelRatio || 1;
+      const w = rect.width;
+      const h = rect.height - headerH;
+
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      requestPlotRedraw();
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+
+    // Initial sizing after layout
+    setTimeout(resizeCanvas, 50);
+
+    btnPlotClear.addEventListener('click', () => {
+      odoPoints.length = 0;
+      plotInfo.textContent = '0 points';
+      requestPlotRedraw();
+    });
+
+    function drawPlot() {
+      const w = canvas.width / (window.devicePixelRatio || 1);
+      const h = canvas.height / (window.devicePixelRatio || 1);
+
+      // Clear
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(0, 0, w, h);
+
+      if (odoPoints.length === 0) {
+        ctx.fillStyle = '#444';
+        ctx.font = '13px ' + getComputedStyle(document.body).fontFamily;
+        ctx.textAlign = 'center';
+        ctx.fillText('Waiting for [ODO] data...', w / 2, h / 2);
+        return;
+      }
+
+      // Compute bounds
+      const margin = 50;
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      for (const p of odoPoints) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+
+      // Ensure non-zero range
+      if (maxX - minX < 10) { minX -= 50; maxX += 50; }
+      if (maxY - minY < 10) { minY -= 50; maxY += 50; }
+
+      // Add 10% padding
+      const padX = (maxX - minX) * 0.1;
+      const padY = (maxY - minY) * 0.1;
+      minX -= padX; maxX += padX;
+      minY -= padY; maxY += padY;
+
+      const plotW = w - margin * 2;
+      const plotH = h - margin * 2;
+      const rangeX = maxX - minX;
+      const rangeY = maxY - minY;
+
+      // Uniform scale (aspect ratio 1:1)
+      const scale = Math.min(plotW / rangeX, plotH / rangeY);
+      const offsetX = margin + (plotW - rangeX * scale) / 2;
+      const offsetY = margin + (plotH - rangeY * scale) / 2;
+
+      function toScreenX(x) { return offsetX + (x - minX) * scale; }
+      function toScreenY(y) { return offsetY + (maxY - y) * scale; } // Y-axis inverted
+
+      // Grid
+      drawGrid(w, h, margin, minX, maxX, minY, maxY, toScreenX, toScreenY);
+
+      // Trajectory line (phase-colored segments)
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round';
+      let segPhase = odoPoints[0].phase;
+      ctx.beginPath();
+      ctx.strokeStyle = phaseColor(segPhase);
+      ctx.moveTo(toScreenX(odoPoints[0].x), toScreenY(odoPoints[0].y));
+      for (let i = 1; i < odoPoints.length; i++) {
+        const p = odoPoints[i];
+        const sx = toScreenX(p.x);
+        const sy = toScreenY(p.y);
+        if (p.phase !== segPhase) {
+          // Finish previous segment
+          ctx.lineTo(sx, sy);
+          ctx.stroke();
+          // Start new segment with new color
+          segPhase = p.phase;
+          ctx.beginPath();
+          ctx.strokeStyle = phaseColor(segPhase);
+          ctx.moveTo(sx, sy);
+        } else {
+          ctx.lineTo(sx, sy);
+        }
+      }
+      ctx.stroke();
+
+      // Start marker (green circle)
+      const s0 = odoPoints[0];
+      ctx.beginPath();
+      ctx.arc(toScreenX(s0.x), toScreenY(s0.y), 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#4ecca3';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Current position marker (red circle)
+      const last = odoPoints[odoPoints.length - 1];
+      ctx.beginPath();
+      ctx.arc(toScreenX(last.x), toScreenY(last.y), 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#e94560';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Direction arrow at current position
+      if (odoPoints.length >= 2) {
+        const thetaRad = (last.theta * Math.PI) / 180;
+        const arrowLen = 15;
+        const ax = toScreenX(last.x) + arrowLen * Math.cos(-thetaRad);
+        const ay = toScreenY(last.y) - arrowLen * Math.sin(-thetaRad);
+        ctx.beginPath();
+        ctx.moveTo(toScreenX(last.x), toScreenY(last.y));
+        ctx.lineTo(ax, ay);
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // Legend
+      ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'left';
+      let ly = 10;
+      const legendH = 14;
+
+      ctx.fillStyle = '#4ecca3';
+      ctx.fillRect(w - 120, ly, 8, 8);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('Start', w - 108, ly + 8);
+      ly += legendH;
+
+      ctx.fillStyle = '#e94560';
+      ctx.fillRect(w - 120, ly, 8, 8);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('Current', w - 108, ly + 8);
+      ly += legendH;
+
+      // Phase legend (only show phases that exist in data)
+      const phases = new Set(odoPoints.map(p => p.phase));
+      if (phases.has('measure')) {
+        ly += 4;
+        ctx.strokeStyle = phaseColor('measure');
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(w - 120, ly + 4);
+        ctx.lineTo(w - 112, ly + 4);
+        ctx.stroke();
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('Measure', w - 108, ly + 8);
+        ly += legendH;
+      }
+      if (phases.has('course')) {
+        ctx.strokeStyle = phaseColor('course');
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(w - 120, ly + 4);
+        ctx.lineTo(w - 112, ly + 4);
+        ctx.stroke();
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('Course', w - 108, ly + 8);
+        ly += legendH;
+      }
+    }
+
+    function drawGrid(w, h, margin, minX, maxX, minY, maxY, toSX, toSY) {
+      ctx.font = '10px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+
+      // Compute nice grid step
+      const rangeX = maxX - minX;
+      const rangeY = maxY - minY;
+      const stepX = niceStep(rangeX, 6);
+      const stepY = niceStep(rangeY, 6);
+
+      ctx.strokeStyle = '#1e2a3a';
+      ctx.lineWidth = 0.5;
+
+      // Vertical grid lines (X axis)
+      const x0 = Math.ceil(minX / stepX) * stepX;
+      for (let x = x0; x <= maxX; x += stepX) {
+        const sx = toSX(x);
+        if (sx < margin - 5 || sx > w - margin + 5) continue;
+        ctx.beginPath();
+        ctx.moveTo(sx, margin);
+        ctx.lineTo(sx, h - margin);
+        ctx.stroke();
+
+        ctx.fillStyle = '#555';
+        ctx.fillText(Math.round(x).toString(), sx, h - margin + 4);
+      }
+
+      // Horizontal grid lines (Y axis)
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      const y0 = Math.ceil(minY / stepY) * stepY;
+      for (let y = y0; y <= maxY; y += stepY) {
+        const sy = toSY(y);
+        if (sy < margin - 5 || sy > h - margin + 5) continue;
+        ctx.beginPath();
+        ctx.moveTo(margin, sy);
+        ctx.lineTo(w - margin, sy);
+        ctx.stroke();
+
+        ctx.fillStyle = '#555';
+        ctx.fillText(Math.round(y).toString(), margin - 4, sy);
+      }
+
+      // Axis labels
+      ctx.fillStyle = '#666';
+      ctx.font = '11px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText('X [mm]', w / 2, h - 12);
+
+      ctx.save();
+      ctx.translate(12, h / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('Y [mm]', 0, 0);
+      ctx.restore();
+    }
+
+    function niceStep(range, targetTicks) {
+      const rough = range / targetTicks;
+      const pow10 = Math.pow(10, Math.floor(Math.log10(rough)));
+      const frac = rough / pow10;
+      let nice;
+      if (frac <= 1.5) nice = 1;
+      else if (frac <= 3.5) nice = 2;
+      else if (frac <= 7.5) nice = 5;
+      else nice = 10;
+      return nice * pow10;
+    }
+
+    function var_blue() { return '#4db8ff'; }
+
+    function phaseColor(phase) {
+      switch (phase) {
+        case 'measure': return '#4ecca3';  // green
+        case 'course':  return '#4db8ff';  // blue
+        default:        return '#888888';  // gray (idle/other)
+      }
+    }
+
+    /* ============================================================
+       Demo mode (for testing without BLE hardware)
+       ============================================================ */
+    // Uncomment the following to inject simulated data:
+    // setInterval(() => {
+    //   const t = Date.now() / 1000;
+    //   const x = Math.round(200 * Math.cos(t * 0.5));
+    //   const y = Math.round(200 * Math.sin(t * 0.5));
+    //   const theta = Math.round((t * 30) % 360);
+    //   processLine('[ODO] x=' + x + ' y=' + y + ' theta=' + theta);
+    // }, 200);
+    // setInterval(() => {
+    //   processLine('[Measure] ref=45 dist=' + Math.round(Math.random()*2000) + ' pts=100 pos=(100,200)');
+    // }, 500);
+  </script>
+
+</body>
+
+</html>
