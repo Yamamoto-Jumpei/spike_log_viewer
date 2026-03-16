@@ -251,6 +251,10 @@
       color: var(--orange);
     }
 
+    .log-line.tag-MAP {
+      color: #f0e68c;
+    }
+
     .log-line.tag-Other {
       color: var(--text-dim);
     }
@@ -375,6 +379,7 @@
           <button class="active" data-filter="CALT">CALT</button>
           <button class="active" data-filter="ODO">ODO</button>
           <button class="active" data-filter="CAL">CAL</button>
+          <button class="active" data-filter="MAP">MAP</button>
           <button class="active" data-filter="Other">Other</button>
         </div>
         <span id="log-count">0 lines</span>
@@ -426,9 +431,10 @@
     let receiveBuffer = '';
     const logLines = [];        // { text, tag, element }
     const odoPoints = [];       // { x, y, theta, phase }
+    const mapSegments = [];     // { type:'L'|'A', ...params }
     let autoScroll = true;
     let currentPhase = 'idle';  // 'idle' | 'measure' | 'course'
-    const activeFilters = new Set(['All', 'Measure', 'ODO', 'CAL', 'CALT', 'Other']);
+    const activeFilters = new Set(['All', 'Measure', 'ODO', 'CAL', 'CALT', 'MAP', 'Other']);
 
     /* ============================================================
        DOM Refs
@@ -669,6 +675,7 @@
       if (line.includes('[CALT]')) return 'CALT';
       if (line.includes('[ODO]')) return 'ODO';
       if (line.includes('[CAL]')) return 'CAL';
+      if (line.includes('[MAP]')) return 'MAP';
       return 'Other';
     }
 
@@ -694,6 +701,43 @@
           });
           plotInfo.textContent = odoPoints.length + ' points';
           requestPlotRedraw();
+        }
+      }
+
+      // Parse MAP data for course map overlay
+      if (tag === 'MAP') {
+        // Line: [MAP] L idx (x1,y1)-(x2,y2)
+        const ml = text.match(/\[MAP\]\s+L\s+(\d+)\s+\((-?\d+),(-?\d+)\)-\((-?\d+),(-?\d+)\)/);
+        if (ml) {
+          const idx = parseInt(ml[1], 10);
+          mapSegments[idx] = {
+            type: 'L',
+            x1: parseInt(ml[2], 10), y1: parseInt(ml[3], 10),
+            x2: parseInt(ml[4], 10), y2: parseInt(ml[5], 10),
+          };
+          requestPlotRedraw();
+        }
+        // Arc main: [MAP] A idx c=(cx,cy) r=R sa=SA
+        const ma = text.match(/\[MAP\]\s+A\s+(\d+)\s+c=\((-?\d+),(-?\d+)\)\s+r=(-?\d+)\s+sa=(-?\d+)/);
+        if (ma) {
+          const idx = parseInt(ma[1], 10);
+          mapSegments[idx] = {
+            type: 'A',
+            cx: parseInt(ma[2], 10), cy: parseInt(ma[3], 10),
+            radius: parseInt(ma[4], 10),
+            startAngle: parseInt(ma[5], 10),
+            sweep: 0,
+          };
+          requestPlotRedraw();
+        }
+        // Arc sweep: [MAP] A idx sw=SW
+        const ms = text.match(/\[MAP\]\s+A\s+(\d+)\s+sw=(-?\d+)/);
+        if (ms && !ma) {
+          const idx = parseInt(ms[1], 10);
+          if (mapSegments[idx] && mapSegments[idx].type === 'A') {
+            mapSegments[idx].sweep = parseInt(ms[2], 10);
+            requestPlotRedraw();
+          }
         }
       }
 
@@ -746,6 +790,7 @@
             activeFilters.add('CALT');
             activeFilters.add('ODO');
             activeFilters.add('CAL');
+            activeFilters.add('MAP');
             activeFilters.add('Other');
           }
         } else {
@@ -760,6 +805,7 @@
               activeFilters.has('CALT') &&
               activeFilters.has('ODO') &&
               activeFilters.has('CAL') &&
+              activeFilters.has('MAP') &&
               activeFilters.has('Other')
             ) {
               activeFilters.add('All');
@@ -791,6 +837,7 @@
     btnClear.addEventListener('click', () => {
       logLines.length = 0;
       odoPoints.length = 0;
+      mapSegments.length = 0;
       logOutput.innerHTML = '';
       logCount.textContent = '0 lines';
       plotInfo.textContent = '0 points';
@@ -932,6 +979,22 @@
         if (p.y < minY) minY = p.y;
         if (p.y > maxY) maxY = p.y;
       }
+      // Include map segment bounds
+      for (const s of mapSegments) {
+        if (!s) continue;
+        if (s.type === 'L') {
+          if (s.x1 < minX) minX = s.x1; if (s.x1 > maxX) maxX = s.x1;
+          if (s.y1 < minY) minY = s.y1; if (s.y1 > maxY) maxY = s.y1;
+          if (s.x2 < minX) minX = s.x2; if (s.x2 > maxX) maxX = s.x2;
+          if (s.y2 < minY) minY = s.y2; if (s.y2 > maxY) maxY = s.y2;
+        } else if (s.type === 'A') {
+          const r = s.radius;
+          if (s.cx - r < minX) minX = s.cx - r;
+          if (s.cx + r > maxX) maxX = s.cx + r;
+          if (s.cy - r < minY) minY = s.cy - r;
+          if (s.cy + r > maxY) maxY = s.cy + r;
+        }
+      }
 
       // Ensure non-zero range
       if (maxX - minX < 10) { minX -= 50; maxX += 50; }
@@ -958,6 +1021,34 @@
 
       // Grid
       drawGrid(w, h, margin, minX, maxX, minY, maxY, toScreenX, toScreenY);
+
+      // Course map overlay (drawn before trajectory so it appears behind)
+      if (mapSegments.length > 0) {
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = 'rgba(255, 220, 100, 0.6)';
+        for (const seg of mapSegments) {
+          if (!seg) continue;
+          if (seg.type === 'L') {
+            ctx.beginPath();
+            ctx.moveTo(toScreenX(seg.x1), toScreenY(seg.y1));
+            ctx.lineTo(toScreenX(seg.x2), toScreenY(seg.y2));
+            ctx.stroke();
+          } else if (seg.type === 'A') {
+            const rad = seg.radius * scale;
+            const startRad = -seg.startAngle * Math.PI / 180;
+            const sweepRad = -seg.sweep * Math.PI / 180;
+            ctx.beginPath();
+            ctx.arc(
+              toScreenX(seg.cx), toScreenY(seg.cy), rad,
+              startRad, startRad + sweepRad,
+              seg.sweep > 0  // counterclockwise flag (canvas Y is inverted)
+            );
+            ctx.stroke();
+          }
+        }
+        ctx.setLineDash([]);
+      }
 
       // Trajectory line (phase-colored segments)
       ctx.lineWidth = 1.5;
@@ -1009,8 +1100,8 @@
       if (odoPoints.length >= 2) {
         const thetaRad = (last.theta * Math.PI) / 180;
         const arrowLen = 15;
-        const ax = toScreenX(last.x) + arrowLen * Math.cos(-thetaRad);
-        const ay = toScreenY(last.y) - arrowLen * Math.sin(-thetaRad);
+        const ax = toScreenX(last.x) + arrowLen * Math.cos(thetaRad);
+        const ay = toScreenY(last.y) - arrowLen * Math.sin(thetaRad);
         ctx.beginPath();
         ctx.moveTo(toScreenX(last.x), toScreenY(last.y));
         ctx.lineTo(ax, ay);
@@ -1060,6 +1151,19 @@
         ctx.stroke();
         ctx.fillStyle = '#aaa';
         ctx.fillText('Course', w - 108, ly + 8);
+        ly += legendH;
+      }
+      if (mapSegments.some(s => s)) {
+        ctx.strokeStyle = 'rgba(255, 220, 100, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(w - 120, ly + 4);
+        ctx.lineTo(w - 112, ly + 4);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('Map', w - 108, ly + 8);
         ly += legendH;
       }
     }
