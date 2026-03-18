@@ -288,6 +288,28 @@
       margin-left: auto;
     }
 
+    #lap-time {
+      font-size: 11px;
+      color: var(--orange);
+      margin-left: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    #lap-time.is-idle,
+    #lap-time.is-unavailable {
+      color: var(--text-dim);
+      font-weight: 400;
+    }
+
+    #lap-time.is-running {
+      color: var(--yellow);
+    }
+
+    #lap-time.is-done {
+      color: var(--green);
+    }
+
     /* ---- Tuning Panel ---- */
     #tuning-panel {
       flex: 1;
@@ -488,6 +510,7 @@
         <span>Trajectory</span>
         <button id="btn-plot-clear" style="font-size:11px;padding:2px 8px;">Reset View</button>
         <span id="plot-info">0 points</span>
+        <span id="lap-time" class="is-idle">Race Lap: --</span>
       </div>
       <canvas id="plot-canvas"></canvas>
     </div>
@@ -554,6 +577,12 @@
       lastAnalysis: null,     // cached analysis result
     };
 
+    const raceLap = {
+      startAt: null,
+      elapsedMs: null,
+      status: 'idle',     // 'idle' | 'running' | 'done' | 'unavailable'
+    };
+
     // Fallback default parameters (used when config log is not available)
     const DEFAULT_CONFIG = {
       kp: 3.5, ki: 0.0, kd: 0.6,
@@ -579,8 +608,49 @@
     const logOutput = document.getElementById('log-output');
     const logCount = document.getElementById('log-count');
     const plotInfo = document.getElementById('plot-info');
+    const lapTimeEl = document.getElementById('lap-time');
     const canvas = document.getElementById('plot-canvas');
     const ctx = canvas.getContext('2d');
+
+    function resetRaceLap(status = 'idle') {
+      raceLap.startAt = null;
+      raceLap.elapsedMs = null;
+      raceLap.status = status;
+      renderRaceLap();
+    }
+
+    function formatLapTime(ms) {
+      const totalMs = Math.max(0, Math.round(ms));
+      const minutes = Math.floor(totalMs / 60000);
+      const seconds = Math.floor((totalMs % 60000) / 1000);
+      const millis = totalMs % 1000;
+      if (minutes > 0) {
+        return String(minutes) + ':' + String(seconds).padStart(2, '0') + '.' +
+          String(millis).padStart(3, '0');
+      }
+      return String(seconds) + '.' + String(millis).padStart(3, '0') + ' s';
+    }
+
+    function renderRaceLap() {
+      lapTimeEl.className = '';
+      lapTimeEl.classList.add('is-' + raceLap.status);
+
+      if (raceLap.status === 'running') {
+        lapTimeEl.textContent = 'Race Lap: Running...';
+        return;
+      }
+      if (raceLap.status === 'done' && raceLap.elapsedMs != null) {
+        lapTimeEl.textContent = 'Race Lap: ' + formatLapTime(raceLap.elapsedMs);
+        return;
+      }
+      if (raceLap.status === 'unavailable') {
+        lapTimeEl.textContent = 'Race Lap: unavailable for loaded logs';
+        return;
+      }
+      lapTimeEl.textContent = 'Race Lap: --';
+    }
+
+    renderRaceLap();
 
     /* ============================================================
        API Support Check
@@ -792,7 +862,7 @@
       for (const raw of parts) {
         const line = raw.replace(/\r$/, '').trim();
         if (line.length === 0) continue;
-        processLine(line);
+        processLine(line, 'live');
       }
     }
 
@@ -805,7 +875,7 @@
       return 'Other';
     }
 
-    function processLine(text) {
+    function processLine(text, source = 'live') {
       const tag = classifyTag(text);
 
       // Detect phase transitions from log messages
@@ -825,6 +895,26 @@
 
       // Parse CALT data for tuning
       if (tag === 'CALT') {
+        const hasRaceLapEvent = text.includes('[CALT] START pos=') ||
+          text.includes('[CALT] LAP COMPLETE');
+        if (source === 'file' && hasRaceLapEvent) {
+          raceLap.status = 'unavailable';
+          renderRaceLap();
+        }
+
+        if (source === 'live') {
+          if (text.includes('[CALT] START pos=')) {
+            raceLap.startAt = performance.now();
+            raceLap.elapsedMs = null;
+            raceLap.status = 'running';
+            renderRaceLap();
+          } else if (text.includes('[CALT] LAP COMPLETE') && raceLap.startAt != null) {
+            raceLap.elapsedMs = performance.now() - raceLap.startAt;
+            raceLap.status = 'done';
+            renderRaceLap();
+          }
+        }
+
         // Periodic sample: [CALT] ref=XX spd=YY sec=ZZ rem=WW
         const mr = text.match(/\[CALT\]\s+ref=(-?\d+)\s+spd=(-?\d+)\s+sec=(-?\d+)\s+rem=(-?\d+)/);
         if (mr) {
@@ -1022,6 +1112,7 @@
       logLines.length = 0;
       odoPoints.length = 0;
       mapSegments.length = 0;
+      resetRaceLap();
       logOutput.innerHTML = '';
       logCount.textContent = '0 lines';
       plotInfo.textContent = '0 points';
@@ -1075,6 +1166,7 @@
         logLines.length = 0;
         odoPoints.length = 0;
         mapSegments.length = 0;
+        resetRaceLap();
         logOutput.innerHTML = '';
         logCount.textContent = '0 lines';
         plotInfo.textContent = '0 points';
@@ -1091,7 +1183,7 @@
         for (const raw of lines) {
           const line = raw.replace(/\r$/, '').trim();
           if (line.length === 0) continue;
-          processLine(line);
+          processLine(line, 'file');
         }
 
         // Scroll to top after loading
@@ -1444,8 +1536,8 @@
     function phaseColor(phase) {
       switch (phase) {
         case 'measure': return '#4ecca3';  // green
-        case 'course':  return '#4db8ff';  // blue
-        default:        return '#888888';  // gray (idle/other)
+        case 'course': return '#4db8ff';  // blue
+        default: return '#888888';  // gray (idle/other)
       }
     }
 
@@ -1488,7 +1580,7 @@
       let oscCount = 0;
       for (let i = 1; i < errors.length; i++) {
         if ((errors[i] > 0 && errors[i - 1] < 0) ||
-            (errors[i] < 0 && errors[i - 1] > 0)) {
+          (errors[i] < 0 && errors[i - 1] > 0)) {
           oscCount++;
         }
       }
@@ -1703,7 +1795,7 @@
       }
 
       const { errorStats, lineStats, arcStats, worstSec, worstStddev,
-              courseStats, config, recommended, errors } = analysis;
+        courseStats, config, recommended, errors } = analysis;
 
       statusEl.textContent = errorStats.sampleCount + ' samples';
 
@@ -1733,9 +1825,9 @@
         const segType = seg ? (seg.type === 'A' ? 'ARC' : 'LINE') : '?';
         const segDetail = seg && seg.type === 'A' ? ' r=' + seg.radius : '';
         html += '<div class="tuning-row"><span class="label">Worst</span>' +
-                '<span class="value worst-section">#' + worstSec +
-                ' (' + segType + segDetail + ') sd=' +
-                worstStddev.toFixed(1) + '</span></div>';
+          '<span class="value worst-section">#' + worstSec +
+          ' (' + segType + segDetail + ') sd=' +
+          worstStddev.toFixed(1) + '</span></div>';
       }
       html += '</div>';
 
@@ -1762,9 +1854,9 @@
       html += paramRow('min_curve_speed', recommended.minCurveSpeed, config.minCurveSpeed);
       html += paramRow('pre_brake_dist', recommended.preBrakeDist, config.preBrakeDist);
       html += '<div class="tuning-actions">' +
-              '<button id="btn-copy-cpp" title="Copy as C++ code">Copy C++</button>' +
-              '<button id="btn-copy-json" title="Copy as JSON">Copy JSON</button>' +
-              '</div>';
+        '<button id="btn-copy-cpp" title="Copy as C++ code">Copy C++</button>' +
+        '<button id="btn-copy-json" title="Copy as JSON">Copy JSON</button>' +
+        '</div>';
       html += '</div>';
 
       // --- Histogram ---
@@ -1788,8 +1880,8 @@
 
     function tuningRow(label, value) {
       return '<div class="tuning-row">' +
-             '<span class="label">' + label + '</span>' +
-             '<span class="value">' + value + '</span></div>';
+        '<span class="label">' + label + '</span>' +
+        '<span class="value">' + value + '</span></div>';
     }
 
     function paramRow(label, recommended, current) {
@@ -1803,10 +1895,10 @@
         deltaHtml = '<span class="delta down">' + formatNum(diff) + '</span>';
       }
       return '<div class="tuning-row">' +
-             '<span class="label">' + label + '</span>' +
-             '<span class="value">' + formatNum(recommended) +
-             ' <span style="color:var(--text-dim);font-weight:400">(' +
-             formatNum(current) + ')</span> ' + deltaHtml + '</span></div>';
+        '<span class="label">' + label + '</span>' +
+        '<span class="value">' + formatNum(recommended) +
+        ' <span style="color:var(--text-dim);font-weight:400">(' +
+        formatNum(current) + ')</span> ' + deltaHtml + '</span></div>';
     }
 
     function formatNum(v) {
@@ -1821,9 +1913,9 @@
       const lines = [
         '// --- Auto-tuned parameters (from BLE Logger analysis) ---',
         '// Error stats: mean=' + errorStats.mean.toFixed(1) +
-          ', stddev=' + errorStats.stddev.toFixed(1) +
-          ', maxAbs=' + errorStats.maxAbs +
-          ', oscRate=' + errorStats.oscRate.toFixed(2),
+        ', stddev=' + errorStats.stddev.toFixed(1) +
+        ', maxAbs=' + errorStats.maxAbs +
+        ', oscRate=' + errorStats.oscRate.toFixed(2),
       ];
       if (courseStats) {
         lines.push('// Course: ' + courseStats.segmentCount + ' segments' +
@@ -1832,7 +1924,7 @@
       }
       lines.push(
         'tracer.setGains(' + rec.kp.toFixed(2) + 'F, ' +
-          rec.ki.toFixed(2) + 'F, ' + rec.kd.toFixed(2) + 'F);',
+        rec.ki.toFixed(2) + 'F, ' + rec.kd.toFixed(2) + 'F);',
         'tracer.setBaseSpeed(' + rec.baseSpeed + ');',
         'tracer.setOutputLimit(' + rec.outputLimit + ');',
         'tracer.setCurveSlowdown(' + rec.curveSlowdown.toFixed(2) + 'F);',
