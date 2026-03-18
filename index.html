@@ -288,6 +288,97 @@
       margin-left: auto;
     }
 
+    /* ---- Tuning Panel ---- */
+    #tuning-panel {
+      flex: 1;
+      min-width: 280px;
+      max-width: 360px;
+    }
+
+    #tuning-content {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .tuning-section {
+      margin-bottom: 14px;
+    }
+
+    .tuning-section h3 {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--blue);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 4px;
+      margin-bottom: 6px;
+    }
+
+    .tuning-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 1px 0;
+    }
+
+    .tuning-row .label {
+      color: var(--text-dim);
+    }
+
+    .tuning-row .value {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .tuning-row .delta {
+      font-size: 10px;
+      margin-left: 6px;
+    }
+
+    .tuning-row .delta.up {
+      color: var(--green);
+    }
+
+    .tuning-row .delta.down {
+      color: var(--accent);
+    }
+
+    .tuning-row .delta.same {
+      color: var(--text-dim);
+    }
+
+    .tuning-placeholder {
+      color: var(--text-dim);
+      text-align: center;
+      padding: 30px 10px;
+    }
+
+    .tuning-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .tuning-actions button {
+      font-size: 11px;
+      padding: 4px 10px;
+    }
+
+    #tuning-histogram {
+      width: 100%;
+      height: 80px;
+      background: #0d1117;
+      border-radius: 4px;
+      display: block;
+    }
+
+    .worst-section {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
     /* ============================================================
    Responsive
    ============================================================ */
@@ -305,6 +396,10 @@
 
       .panel:last-child {
         border-bottom: none;
+      }
+
+      #tuning-panel {
+        max-width: none;
       }
     }
 
@@ -396,6 +491,21 @@
       </div>
       <canvas id="plot-canvas"></canvas>
     </div>
+
+    <!-- Tuning Panel -->
+    <div class="panel" id="tuning-panel">
+      <div class="panel-header">
+        <span>Tuning</span>
+        <span id="tuning-status" style="font-size:11px;color:var(--text-dim);margin-left:auto;">No data</span>
+      </div>
+      <div id="tuning-content">
+        <div class="tuning-placeholder">
+          Waiting for [CALT] log data...<br><br>
+          Run a course or load a .log file<br>
+          to analyze and recommend parameters.
+        </div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -435,6 +545,22 @@
     let autoScroll = true;
     let currentPhase = 'idle';  // 'idle' | 'measure' | 'course'
     const activeFilters = new Set(['All', 'Measure', 'ODO', 'CAL', 'CALT', 'MAP', 'Other']);
+
+    // Tuning state
+    const tuningData = {
+      target: null,           // calibration target reflection
+      caltSamples: [],        // { ref, spd, sec } from [CALT] periodic logs
+      currentConfig: null,    // parsed from [CALT] config lines
+      lastAnalysis: null,     // cached analysis result
+    };
+
+    // Fallback default parameters (used when config log is not available)
+    const DEFAULT_CONFIG = {
+      kp: 3.5, ki: 0.0, kd: 0.6,
+      baseSpeed: 800, outputLimit: 800,
+      curveSlowdown: 0.30, rateLimit: 5,
+      straightSpeed: 1000, minCurveSpeed: 400, preBrakeDist: 250,
+    };
 
     /* ============================================================
        DOM Refs
@@ -689,6 +815,64 @@
         currentPhase = 'course';
       }
 
+      // Parse CAL target for tuning
+      if (tag === 'CAL') {
+        const mc = text.match(/\[CAL\]\s+Applied:\s+target=(\d+)/);
+        if (mc) {
+          tuningData.target = parseInt(mc[1], 10);
+        }
+      }
+
+      // Parse CALT data for tuning
+      if (tag === 'CALT') {
+        // Periodic sample: [CALT] ref=XX spd=YY sec=ZZ rem=WW
+        const mr = text.match(/\[CALT\]\s+ref=(-?\d+)\s+spd=(-?\d+)\s+sec=(-?\d+)\s+rem=(-?\d+)/);
+        if (mr) {
+          tuningData.caltSamples.push({
+            ref: parseInt(mr[1], 10),
+            spd: parseInt(mr[2], 10),
+            sec: parseInt(mr[3], 10),
+            rem: parseInt(mr[4], 10),
+          });
+          requestTuningUpdate();
+        }
+        // Config line: [CALT] config kp=XX ki=YY kd=ZZ (values are x100)
+        const mkp = text.match(/\[CALT\]\s+config\s+kp=(-?\d+)\s+ki=(-?\d+)\s+kd=(-?\d+)/);
+        if (mkp) {
+          if (!tuningData.currentConfig) tuningData.currentConfig = {};
+          tuningData.currentConfig.kp = parseInt(mkp[1], 10) / 100;
+          tuningData.currentConfig.ki = parseInt(mkp[2], 10) / 100;
+          tuningData.currentConfig.kd = parseInt(mkp[3], 10) / 100;
+        }
+        // Config line: [CALT] config base=XX limit=YY
+        const mbl = text.match(/\[CALT\]\s+config\s+base=(-?\d+)\s+limit=(-?\d+)/);
+        if (mbl) {
+          if (!tuningData.currentConfig) tuningData.currentConfig = {};
+          tuningData.currentConfig.baseSpeed = parseInt(mbl[1], 10);
+          tuningData.currentConfig.outputLimit = parseInt(mbl[2], 10);
+        }
+        // Config line: [CALT] config curve=XX rate=YY (curve is x100)
+        const mcr = text.match(/\[CALT\]\s+config\s+curve=(-?\d+)\s+rate=(-?\d+)/);
+        if (mcr) {
+          if (!tuningData.currentConfig) tuningData.currentConfig = {};
+          tuningData.currentConfig.curveSlowdown = parseInt(mcr[1], 10) / 100;
+          tuningData.currentConfig.rateLimit = parseInt(mcr[2], 10);
+        }
+        // Config line: [CALT] config straight=XX minCurve=YY
+        const msc = text.match(/\[CALT\]\s+config\s+straight=(-?\d+)\s+minCurve=(-?\d+)/);
+        if (msc) {
+          if (!tuningData.currentConfig) tuningData.currentConfig = {};
+          tuningData.currentConfig.straightSpeed = parseInt(msc[1], 10);
+          tuningData.currentConfig.minCurveSpeed = parseInt(msc[2], 10);
+        }
+        // Config line: [CALT] config preBrake=XX
+        const mpb = text.match(/\[CALT\]\s+config\s+preBrake=(-?\d+)/);
+        if (mpb) {
+          if (!tuningData.currentConfig) tuningData.currentConfig = {};
+          tuningData.currentConfig.preBrakeDist = parseInt(mpb[1], 10);
+        }
+      }
+
       // Parse ODO data for trajectory
       if (tag === 'ODO') {
         const m = text.match(/\[ODO\]\s+x=(-?\d+)\s+y=(-?\d+)\s+theta=(-?\d+)/);
@@ -843,6 +1027,12 @@
       plotInfo.textContent = '0 points';
       receiveBuffer = '';
       currentPhase = 'idle';
+      // Reset tuning state
+      tuningData.target = null;
+      tuningData.caltSamples.length = 0;
+      tuningData.currentConfig = null;
+      tuningData.lastAnalysis = null;
+      renderTuningPanel();
       requestPlotRedraw();
     });
 
@@ -884,11 +1074,17 @@
         // Clear existing data
         logLines.length = 0;
         odoPoints.length = 0;
+        mapSegments.length = 0;
         logOutput.innerHTML = '';
         logCount.textContent = '0 lines';
         plotInfo.textContent = '0 points';
         receiveBuffer = '';
         currentPhase = 'idle';
+        // Reset tuning state
+        tuningData.target = null;
+        tuningData.caltSamples.length = 0;
+        tuningData.currentConfig = null;
+        tuningData.lastAnalysis = null;
 
         // Process each line through the existing pipeline
         const lines = ev.target.result.split('\n');
@@ -901,6 +1097,9 @@
         // Scroll to top after loading
         autoScroll = false;
         logOutput.scrollTop = 0;
+
+        // Trigger tuning analysis after loading
+        runTuningAnalysis();
 
         setStatus('Loaded: ' + file.name + ' (' + logLines.length + ' lines)');
       };
@@ -1248,6 +1447,486 @@
         case 'course':  return '#4db8ff';  // blue
         default:        return '#888888';  // gray (idle/other)
       }
+    }
+
+    /* ============================================================
+       Tuning Analysis
+       ============================================================ */
+    let tuningUpdateRequested = false;
+
+    function requestTuningUpdate() {
+      if (!tuningUpdateRequested) {
+        tuningUpdateRequested = true;
+        // Debounce: update at most every 500ms during live reception
+        setTimeout(() => {
+          tuningUpdateRequested = false;
+          runTuningAnalysis();
+        }, 500);
+      }
+    }
+
+    function runTuningAnalysis() {
+      const samples = tuningData.caltSamples;
+      if (samples.length < 5) {
+        tuningData.lastAnalysis = null;
+        renderTuningPanel();
+        return;
+      }
+
+      const target = tuningData.target;
+      const config = tuningData.currentConfig || DEFAULT_CONFIG;
+
+      // --- Error statistics ---
+      const errors = samples.map(s => target != null ? target - s.ref : -s.ref);
+      const n = errors.length;
+      const mean = errors.reduce((a, b) => a + b, 0) / n;
+      const variance = errors.reduce((a, e) => a + (e - mean) ** 2, 0) / n;
+      const stddev = Math.sqrt(variance);
+      const maxAbs = Math.max(...errors.map(Math.abs));
+
+      // Oscillation count (sign reversals)
+      let oscCount = 0;
+      for (let i = 1; i < errors.length; i++) {
+        if ((errors[i] > 0 && errors[i - 1] < 0) ||
+            (errors[i] < 0 && errors[i - 1] > 0)) {
+          oscCount++;
+        }
+      }
+      const oscRate = oscCount / n;
+
+      // --- Per-section-type statistics ---
+      const lineErrors = [];
+      const arcErrors = [];
+      const sectionErrors = {};  // sec_index -> [errors]
+      for (let i = 0; i < samples.length; i++) {
+        const sec = samples[i].sec;
+        const err = errors[i];
+        if (!sectionErrors[sec]) sectionErrors[sec] = [];
+        sectionErrors[sec].push(err);
+
+        // Classify by segment type from mapSegments
+        const seg = mapSegments[sec];
+        if (seg) {
+          if (seg.type === 'L') lineErrors.push(err);
+          else if (seg.type === 'A') arcErrors.push(err);
+        }
+      }
+
+      function calcStats(arr) {
+        if (arr.length === 0) return { mean: 0, stddev: 0, maxAbs: 0, count: 0 };
+        const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+        const v = arr.reduce((a, e) => a + (e - m) ** 2, 0) / arr.length;
+        return {
+          mean: m,
+          stddev: Math.sqrt(v),
+          maxAbs: Math.max(...arr.map(Math.abs)),
+          count: arr.length,
+        };
+      }
+
+      const lineStats = calcStats(lineErrors);
+      const arcStats = calcStats(arcErrors);
+
+      // Worst section
+      let worstSec = -1;
+      let worstStddev = 0;
+      for (const [sec, errs] of Object.entries(sectionErrors)) {
+        const st = calcStats(errs);
+        if (st.stddev > worstStddev && errs.length >= 3) {
+          worstStddev = st.stddev;
+          worstSec = parseInt(sec, 10);
+        }
+      }
+
+      // --- Course map analysis ---
+      const courseStats = analyzeCourseMap();
+
+      // --- Compute recommended parameters ---
+      const recommended = computeRecommendedParams(
+        { mean, variance, stddev, maxAbs, oscRate },
+        { line: lineStats, arc: arcStats },
+        courseStats,
+        config,
+      );
+
+      tuningData.lastAnalysis = {
+        errorStats: { mean, variance, stddev, maxAbs, oscCount, oscRate, sampleCount: n },
+        lineStats,
+        arcStats,
+        worstSec,
+        worstStddev,
+        courseStats,
+        config,
+        recommended,
+        errors,
+      };
+
+      renderTuningPanel();
+    }
+
+    function analyzeCourseMap() {
+      const segs = mapSegments.filter(s => s);
+      if (segs.length === 0) return null;
+
+      let totalLength = 0;
+      let straightLength = 0;
+      let minRadius = Infinity;
+      let arcCount = 0;
+
+      for (const s of segs) {
+        if (s.type === 'L') {
+          const len = Math.sqrt((s.x2 - s.x1) ** 2 + (s.y2 - s.y1) ** 2);
+          totalLength += len;
+          straightLength += len;
+        } else if (s.type === 'A') {
+          const arcLen = s.radius * Math.abs(s.sweep) * Math.PI / 180;
+          totalLength += arcLen;
+          arcCount++;
+          if (s.radius < minRadius) minRadius = s.radius;
+        }
+      }
+
+      const straightRatio = totalLength > 0 ? straightLength / totalLength : 0;
+
+      return {
+        totalLength: Math.round(totalLength),
+        straightLength: Math.round(straightLength),
+        straightRatio,
+        minRadius: minRadius === Infinity ? 0 : minRadius,
+        arcCount,
+        segmentCount: segs.length,
+      };
+    }
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function round2(v) { return Math.round(v * 100) / 100; }
+
+    function computeRecommendedParams(errorStats, segmentStats, courseStats, current) {
+      let kp = current.kp;
+      let ki = current.ki;
+      let kd = current.kd;
+
+      // --- PID gains ---
+      // Arc segment error drives kd
+      if (segmentStats.arc.stddev > 12) {
+        kd *= 1.2;
+      } else if (segmentStats.arc.stddev > 0 && segmentStats.arc.stddev < 5) {
+        kd *= 0.85;
+      }
+      // Line segment error drives kp
+      if (segmentStats.line.stddev > 0 && segmentStats.line.stddev < 5) {
+        kp *= 1.1;
+      } else if (segmentStats.line.stddev > 12) {
+        kp *= 0.9;
+      }
+      // Oscillation
+      if (errorStats.oscRate > 0.4) {
+        kp *= 0.9;
+        kd *= 1.15;
+      } else if (errorStats.oscRate < 0.1 && errorStats.oscRate > 0) {
+        kd *= 0.9;
+      }
+      // Steady-state error
+      if (Math.abs(errorStats.mean) > 3) {
+        ki = 0.01;
+      }
+
+      // --- Base speed ---
+      let stabilityScore = 1.0 - errorStats.stddev / 20.0;
+      stabilityScore = clamp(stabilityScore, 0.3, 1.0);
+      // Scale around current base speed
+      let baseSpeed = Math.round(current.baseSpeed * (0.85 + stabilityScore * 0.30));
+
+      let outputLimit = baseSpeed;
+
+      // --- Curve slowdown ---
+      let curveSlowdown;
+      if (segmentStats.arc.count === 0) {
+        curveSlowdown = current.curveSlowdown;
+      } else if (segmentStats.arc.stddev > 15) {
+        curveSlowdown = 0.20;
+      } else if (segmentStats.arc.stddev < 6) {
+        curveSlowdown = 0.40;
+      } else {
+        curveSlowdown = 0.20 + (15 - segmentStats.arc.stddev) / 9 * 0.20;
+      }
+
+      // --- Rate limit ---
+      let rateLimit = Math.max(3, Math.round(baseSpeed / 150));
+
+      // --- CourseAware parameters ---
+      let straightSpeed = Math.min(1200, Math.round(baseSpeed * 1.25));
+
+      let minCurveSpeed;
+      if (courseStats && courseStats.minRadius > 0 && courseStats.minRadius < 100) {
+        minCurveSpeed = 300;
+      } else if (courseStats && courseStats.minRadius > 0 && courseStats.minRadius < 200) {
+        minCurveSpeed = 400;
+      } else {
+        minCurveSpeed = 500;
+      }
+      // Adjust for arc error
+      if (segmentStats.arc.stddev > 15) {
+        minCurveSpeed = Math.max(250, minCurveSpeed - 100);
+      }
+
+      let preBrakeDist = Math.max(150,
+        Math.round((straightSpeed - minCurveSpeed) * 0.4));
+
+      return {
+        kp: round2(kp), ki: round2(ki), kd: round2(kd),
+        baseSpeed, outputLimit,
+        curveSlowdown: round2(curveSlowdown), rateLimit,
+        straightSpeed, minCurveSpeed, preBrakeDist,
+      };
+    }
+
+    /* ============================================================
+       Tuning Panel Rendering
+       ============================================================ */
+    function renderTuningPanel() {
+      const container = document.getElementById('tuning-content');
+      const statusEl = document.getElementById('tuning-status');
+
+      const analysis = tuningData.lastAnalysis;
+      if (!analysis) {
+        container.innerHTML =
+          '<div class="tuning-placeholder">' +
+          'Waiting for [CALT] log data...<br><br>' +
+          'Run a course or load a .log file<br>' +
+          'to analyze and recommend parameters.' +
+          '</div>';
+        statusEl.textContent = tuningData.caltSamples.length > 0
+          ? tuningData.caltSamples.length + ' samples (need 5+)'
+          : 'No data';
+        return;
+      }
+
+      const { errorStats, lineStats, arcStats, worstSec, worstStddev,
+              courseStats, config, recommended, errors } = analysis;
+
+      statusEl.textContent = errorStats.sampleCount + ' samples';
+
+      let html = '';
+
+      // --- Error Statistics ---
+      html += '<div class="tuning-section"><h3>Error Statistics</h3>';
+      html += tuningRow('Samples', errorStats.sampleCount);
+      html += tuningRow('Mean Error', errorStats.mean.toFixed(1));
+      html += tuningRow('Std Dev', errorStats.stddev.toFixed(1));
+      html += tuningRow('Max |Error|', errorStats.maxAbs);
+      html += tuningRow('Osc Rate', errorStats.oscRate.toFixed(2));
+      html += '</div>';
+
+      // --- Per-type stats ---
+      html += '<div class="tuning-section"><h3>Per Segment Type</h3>';
+      if (lineStats.count > 0) {
+        html += tuningRow('LINE mean', lineStats.mean.toFixed(1));
+        html += tuningRow('LINE stddev', lineStats.stddev.toFixed(1));
+      }
+      if (arcStats.count > 0) {
+        html += tuningRow('ARC mean', arcStats.mean.toFixed(1));
+        html += tuningRow('ARC stddev', arcStats.stddev.toFixed(1));
+      }
+      if (worstSec >= 0) {
+        const seg = mapSegments[worstSec];
+        const segType = seg ? (seg.type === 'A' ? 'ARC' : 'LINE') : '?';
+        const segDetail = seg && seg.type === 'A' ? ' r=' + seg.radius : '';
+        html += '<div class="tuning-row"><span class="label">Worst</span>' +
+                '<span class="value worst-section">#' + worstSec +
+                ' (' + segType + segDetail + ') sd=' +
+                worstStddev.toFixed(1) + '</span></div>';
+      }
+      html += '</div>';
+
+      // --- Course Analysis ---
+      if (courseStats) {
+        html += '<div class="tuning-section"><h3>Course Analysis</h3>';
+        html += tuningRow('Segments', courseStats.segmentCount);
+        html += tuningRow('Min Radius', courseStats.minRadius > 0 ? courseStats.minRadius + 'mm' : 'N/A');
+        html += tuningRow('Straight', Math.round(courseStats.straightRatio * 100) + '%');
+        html += tuningRow('Total Length', courseStats.totalLength + 'mm');
+        html += '</div>';
+      }
+
+      // --- Recommended Parameters ---
+      html += '<div class="tuning-section"><h3>Recommended Parameters</h3>';
+      html += paramRow('kp', recommended.kp, config.kp);
+      html += paramRow('ki', recommended.ki, config.ki);
+      html += paramRow('kd', recommended.kd, config.kd);
+      html += paramRow('base_speed', recommended.baseSpeed, config.baseSpeed);
+      html += paramRow('output_limit', recommended.outputLimit, config.outputLimit);
+      html += paramRow('curve_slowdown', recommended.curveSlowdown, config.curveSlowdown);
+      html += paramRow('rate_limit', recommended.rateLimit, config.rateLimit);
+      html += paramRow('straight_speed', recommended.straightSpeed, config.straightSpeed);
+      html += paramRow('min_curve_speed', recommended.minCurveSpeed, config.minCurveSpeed);
+      html += paramRow('pre_brake_dist', recommended.preBrakeDist, config.preBrakeDist);
+      html += '<div class="tuning-actions">' +
+              '<button id="btn-copy-cpp" title="Copy as C++ code">Copy C++</button>' +
+              '<button id="btn-copy-json" title="Copy as JSON">Copy JSON</button>' +
+              '</div>';
+      html += '</div>';
+
+      // --- Histogram ---
+      html += '<div class="tuning-section"><h3>Error Distribution</h3>';
+      html += '<canvas id="tuning-histogram"></canvas>';
+      html += '</div>';
+
+      container.innerHTML = html;
+
+      // Attach button handlers
+      document.getElementById('btn-copy-cpp').addEventListener('click', () => {
+        copyAsCpp(recommended, errorStats, courseStats, config);
+      });
+      document.getElementById('btn-copy-json').addEventListener('click', () => {
+        copyAsJson(recommended);
+      });
+
+      // Draw histogram
+      drawHistogram(errors);
+    }
+
+    function tuningRow(label, value) {
+      return '<div class="tuning-row">' +
+             '<span class="label">' + label + '</span>' +
+             '<span class="value">' + value + '</span></div>';
+    }
+
+    function paramRow(label, recommended, current) {
+      const diff = recommended - current;
+      let deltaHtml = '';
+      if (Math.abs(diff) < 0.005) {
+        deltaHtml = '<span class="delta same">-</span>';
+      } else if (diff > 0) {
+        deltaHtml = '<span class="delta up">+' + formatNum(diff) + '</span>';
+      } else {
+        deltaHtml = '<span class="delta down">' + formatNum(diff) + '</span>';
+      }
+      return '<div class="tuning-row">' +
+             '<span class="label">' + label + '</span>' +
+             '<span class="value">' + formatNum(recommended) +
+             ' <span style="color:var(--text-dim);font-weight:400">(' +
+             formatNum(current) + ')</span> ' + deltaHtml + '</span></div>';
+    }
+
+    function formatNum(v) {
+      if (Number.isInteger(v)) return v.toString();
+      return v.toFixed(2);
+    }
+
+    /* ============================================================
+       Copy Functions
+       ============================================================ */
+    function copyAsCpp(rec, errorStats, courseStats, config) {
+      const lines = [
+        '// --- Auto-tuned parameters (from BLE Logger analysis) ---',
+        '// Error stats: mean=' + errorStats.mean.toFixed(1) +
+          ', stddev=' + errorStats.stddev.toFixed(1) +
+          ', maxAbs=' + errorStats.maxAbs +
+          ', oscRate=' + errorStats.oscRate.toFixed(2),
+      ];
+      if (courseStats) {
+        lines.push('// Course: ' + courseStats.segmentCount + ' segments' +
+          ', minR=' + courseStats.minRadius + 'mm' +
+          ', straight=' + Math.round(courseStats.straightRatio * 100) + '%');
+      }
+      lines.push(
+        'tracer.setGains(' + rec.kp.toFixed(2) + 'F, ' +
+          rec.ki.toFixed(2) + 'F, ' + rec.kd.toFixed(2) + 'F);',
+        'tracer.setBaseSpeed(' + rec.baseSpeed + ');',
+        'tracer.setOutputLimit(' + rec.outputLimit + ');',
+        'tracer.setCurveSlowdown(' + rec.curveSlowdown.toFixed(2) + 'F);',
+        'tracer.setSpeedRateLimit(' + rec.rateLimit + ');',
+        'courseLineTrace.setStraightSpeed(' + rec.straightSpeed + ');',
+        'courseLineTrace.setMinCurveSpeed(' + rec.minCurveSpeed + ');',
+        'courseLineTrace.setPreBrakeDistance(' + rec.preBrakeDist + '.0F);',
+      );
+      const text = lines.join('\n');
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btn-copy-cpp');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy C++'; }, 1500);
+      });
+    }
+
+    function copyAsJson(rec) {
+      const text = JSON.stringify(rec, null, 2);
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btn-copy-json');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1500);
+      });
+    }
+
+    /* ============================================================
+       Error Histogram
+       ============================================================ */
+    function drawHistogram(errors) {
+      const canvas = document.getElementById('tuning-histogram');
+      if (!canvas) return;
+      const ctx2 = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      ctx2.fillStyle = '#0d1117';
+      ctx2.fillRect(0, 0, w, h);
+
+      if (errors.length < 2) return;
+
+      // Compute histogram bins
+      const minE = Math.min(...errors);
+      const maxE = Math.max(...errors);
+      const range = maxE - minE;
+      if (range < 1) return;
+
+      const numBins = Math.min(30, Math.max(10, Math.ceil(errors.length / 5)));
+      const binWidth = range / numBins;
+      const bins = new Array(numBins).fill(0);
+
+      for (const e of errors) {
+        let idx = Math.floor((e - minE) / binWidth);
+        if (idx >= numBins) idx = numBins - 1;
+        bins[idx]++;
+      }
+
+      const maxCount = Math.max(...bins);
+      const margin = { left: 30, right: 10, top: 8, bottom: 18 };
+      const plotW = w - margin.left - margin.right;
+      const plotH = h - margin.top - margin.bottom;
+      const barW = plotW / numBins;
+
+      // Draw bars
+      for (let i = 0; i < numBins; i++) {
+        const barH = maxCount > 0 ? (bins[i] / maxCount) * plotH : 0;
+        const x = margin.left + i * barW;
+        const y = margin.top + plotH - barH;
+        // Color: center bins green, edge bins red
+        const center = numBins / 2;
+        const dist = Math.abs(i - center) / center;
+        const r = Math.round(78 + dist * 155);
+        const g = Math.round(204 - dist * 120);
+        const b = Math.round(163 - dist * 100);
+        ctx2.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+        ctx2.fillRect(x + 1, y, barW - 2, barH);
+      }
+
+      // X axis labels
+      ctx2.fillStyle = '#555';
+      ctx2.font = '9px ' + getComputedStyle(document.body).fontFamily;
+      ctx2.textAlign = 'center';
+      ctx2.textBaseline = 'top';
+      ctx2.fillText(Math.round(minE).toString(), margin.left, h - margin.bottom + 4);
+      ctx2.fillText('0', margin.left + plotW * (-minE / range), h - margin.bottom + 4);
+      ctx2.fillText(Math.round(maxE).toString(), margin.left + plotW, h - margin.bottom + 4);
+
+      // Y axis label
+      ctx2.textAlign = 'right';
+      ctx2.textBaseline = 'top';
+      ctx2.fillText(maxCount.toString(), margin.left - 2, margin.top);
     }
 
     /* ============================================================
